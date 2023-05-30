@@ -1,4 +1,5 @@
 #pragma once
+#include <fuse.h>
 
 #include <netinet/in.h>
 

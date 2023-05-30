@@ -23,6 +23,7 @@ namespace Internal
     void handleData(char* read, int s, int& command, ClientData& clientData, FileController& fc)
     {
         LOGM("handling data...");
+        LOG(command);
 
         switch (command)
         {
@@ -83,6 +84,7 @@ struct TcpServer::impl_t
     std::vector<Socket*> m_clients;
     uint32_t m_maxConnections { 10 };
     pthread_mutex_t clientsMutex;
+    pthread_mutex_t eventLoopMutex;
     pthread_t m_thread;
 };
 
@@ -165,9 +167,9 @@ bool TcpServer::start() noexcept
 void TcpServer::broadcast(union sigval sv) noexcept
 {
     TcpServer* instance = reinterpret_cast<TcpServer*>(sv.sival_ptr);
-    pthread_mutex_lock(&instance->impl().clientsMutex);
+    pthread_mutex_lock(&instance->impl().eventLoopMutex);
 
-    for (auto& client : instance->impl().m_clients)
+    for (auto client : instance->impl().m_clients)
     {
         int32_t data = 1;
 
@@ -180,7 +182,7 @@ void TcpServer::broadcast(union sigval sv) noexcept
         LOGM("succesfully sent");
     }
 
-    pthread_mutex_unlock(&instance->impl().clientsMutex);
+    pthread_mutex_unlock(&instance->impl().eventLoopMutex);
 }
 
 void TcpServer::trampoline(TcpServer *server)
@@ -195,10 +197,11 @@ void TcpServer::join()
 
 void* TcpServer::threadFunc(void *ctx)
 {
-    auto obj = reinterpret_cast<TcpServer*> (ctx);
+    auto obj = reinterpret_cast<TcpServer*>(ctx);
 
     LOG("entering server thread");
     std::cout << "This " << ctx << std::endl;
+
     struct Epoll
     {
         Epoll(int _fd) : fd(_fd)
@@ -207,9 +210,10 @@ void* TcpServer::threadFunc(void *ctx)
 
         ~Epoll()
         {
-            if (!close(fd))
+            if (close(fd) < 0)
             {
                 LOGE("failed to close epoll");
+                LOGE(strerror(errno));
             }
         }
 
@@ -236,9 +240,9 @@ void* TcpServer::threadFunc(void *ctx)
     }
 
     struct itimerspec its;
-    its.it_value.tv_sec = 2;
+    its.it_value.tv_sec = 1;
     its.it_value.tv_nsec = 0;
-    its.it_interval.tv_sec = 1;
+    its.it_interval.tv_sec = 5;
     its.it_interval.tv_nsec = 0;
 
     result = timer_settime(timerId, 0, &its, nullptr);
@@ -381,9 +385,9 @@ void* TcpServer::threadFunc(void *ctx)
                 continue;
             }
 
+            pthread_mutex_lock(&obj->impl().clientsMutex);
             Internal::handleData(read, s, socket->itteration(), socket->data(), obj->impl().m_fileController);
+            pthread_mutex_unlock(&obj->impl().clientsMutex);
         }
     }
-
-    return 0;
 }
